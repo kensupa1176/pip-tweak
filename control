@@ -1,0 +1,7 @@
+Package: com.you.piptweak
+Name: PiP Tweak
+Version: 1.0
+Architecture: iphoneos-arm64
+Description: Floating PiP button
+Author: you
+Section: Tweaks
