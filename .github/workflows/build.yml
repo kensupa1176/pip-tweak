@@ -12,7 +12,6 @@ jobs:
 
       - name: Install Theos
         run: |
-          sudo gem install fpm
           brew install ldid
           git clone --recursive https://github.com/theos/theos.git $HOME/theos
           echo "THEOS=$HOME/theos" >> $GITHUB_ENV
@@ -40,13 +39,17 @@ jobs:
 
       - name: Inject dylib
         run: |
-          brew install insert_dylib
+          git clone https://github.com/tyilo/insert_dylib.git
+          cd insert_dylib
+          xcodebuild -scheme insert_dylib -configuration Release SYMROOT=build
+          sudo cp build/Release/insert_dylib /usr/local/bin/
+          cd ..
+
           unzip MyApp.ipa -d MyApp
           APP_PATH=$(ls MyApp/Payload/)
           APP_NAME="${APP_PATH%.app}"
           mkdir -p "MyApp/Payload/${APP_PATH}/Frameworks"
-          cp $HOME/theos/obj/arm64/PiPTweak.dylib "MyApp/Payload/${APP_PATH}/Frameworks/" 2>/dev/null || \
-          cp .theos/obj/arm64/PiPTweak.dylib "MyApp/Payload/${APP_PATH}/Frameworks/"
+          cp .theos/obj/debug/arm64/PiPTweak.dylib "MyApp/Payload/${APP_PATH}/Frameworks/"
           insert_dylib --strip-codesig --inplace \
             "@executable_path/Frameworks/PiPTweak.dylib" \
             "MyApp/Payload/${APP_PATH}/${APP_NAME}"
