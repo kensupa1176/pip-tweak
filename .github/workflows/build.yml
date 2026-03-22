@@ -1,4 +1,4 @@
-name: Build PiP IPA3
+name: Build PiP IPA4
 
 on: [push]
 
@@ -41,9 +41,17 @@ jobs:
           APP_NAME="${APP_PATH%.app}"
           mkdir -p "MyApp/Payload/${APP_PATH}/Frameworks"
           cp .theos/obj/debug/arm64/PiPTweak.dylib "MyApp/Payload/${APP_PATH}/Frameworks/"
+
+          # dylibに署名
+          ldid -S "MyApp/Payload/${APP_PATH}/Frameworks/PiPTweak.dylib"
+
           insert_dylib --strip-codesig --inplace \
             "@executable_path/Frameworks/PiPTweak.dylib" \
             "MyApp/Payload/${APP_PATH}/${APP_NAME}"
+
+          # バイナリにも署名
+          ldid -S "MyApp/Payload/${APP_PATH}/${APP_NAME}"
+
           cd MyApp && zip -r ../MyApp_pip.ipa Payload
 
       - name: Upload result
