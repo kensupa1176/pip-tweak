@@ -1,4 +1,4 @@
-name: Build PiP IPA4
+name: Build PiP IPA6
 
 on: [push]
 
@@ -39,17 +39,28 @@ jobs:
           unzip MyApp.ipa -d MyApp
           APP_PATH=$(ls MyApp/Payload/)
           APP_NAME="${APP_PATH%.app}"
-          mkdir -p "MyApp/Payload/${APP_PATH}/Frameworks"
-          cp .theos/obj/debug/arm64/PiPTweak.dylib "MyApp/Payload/${APP_PATH}/Frameworks/"
+          DYLIB_PATH=$(find .theos -name "PiPTweak.dylib" | head -1)
+          echo "dylib: $DYLIB_PATH"
+          echo "app: $APP_PATH"
 
-          # dylibに署名
+          mkdir -p "MyApp/Payload/${APP_PATH}/Frameworks"
+          cp "$DYLIB_PATH" "MyApp/Payload/${APP_PATH}/Frameworks/PiPTweak.dylib"
+
+          # Info.plistにaudioバックグラウンドモードを追加
+          PLIST="MyApp/Payload/${APP_PATH}/Info.plist"
+          /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes array" "$PLIST" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes: string audio" "$PLIST" 2>/dev/null || true
+          echo "Info.plist updated"
+
+          # 署名
           ldid -S "MyApp/Payload/${APP_PATH}/Frameworks/PiPTweak.dylib"
 
+          # インジェクト
           insert_dylib --strip-codesig --inplace \
             "@executable_path/Frameworks/PiPTweak.dylib" \
             "MyApp/Payload/${APP_PATH}/${APP_NAME}"
 
-          # バイナリにも署名
+          # バイナリ再署名
           ldid -S "MyApp/Payload/${APP_PATH}/${APP_NAME}"
 
           cd MyApp && zip -r ../MyApp_pip.ipa Payload
