@@ -5,7 +5,7 @@ include $(THEOS)/makefiles/common.mk
 
 LIBRARY_NAME = PiPTweak
 PiPTweak_FILES = Tweak.x
-PiPTweak_FRAMEWORKS = UIKit
+PiPTweak_FRAMEWORKS = UIKit AVKit
 PiPTweak_LDFLAGS = -install_name @executable_path/Frameworks/PiPTweak.dylib
 
 include $(THEOS)/makefiles/library.mk
