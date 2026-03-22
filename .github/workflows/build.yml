@@ -1,4 +1,4 @@
-name: Build PiP IPA
+name: Build PiP IPA2
 
 on: [push]
 
