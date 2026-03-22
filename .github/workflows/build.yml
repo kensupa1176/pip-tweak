@@ -44,7 +44,7 @@ jobs:
           cd MyApp && zip -r ../MyApp_pip.ipa Payload
 
       - name: Upload result
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: MyApp_pip
           path: MyApp_pip.ipa
