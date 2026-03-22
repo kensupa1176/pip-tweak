@@ -1,13 +1,25 @@
 #import <AVKit/AVKit.h>
 #import <UIKit/UIKit.h>
 
+static UIWindow *floatWindow;
+static AVPictureInPictureController *pipController;
+
 @interface FloatingButton : NSObject
 + (void)show;
 @end
 
-static UIWindow *floatWindow;
-
 @implementation FloatingButton
+
++ (UIWindow *)keyWindow {
+    for (UIWindowScene *scene in [UIApplication sharedApplication].connectedScenes) {
+        if (scene.activationState == UISceneActivationStateForegroundActive) {
+            for (UIWindow *window in scene.windows) {
+                if (window.isKeyWindow) return window;
+            }
+        }
+    }
+    return nil;
+}
 
 + (void)show {
     if (floatWindow) return;
@@ -35,11 +47,14 @@ static UIWindow *floatWindow;
 }
 
 + (void)onTap {
-    UIViewController *root = [UIApplication sharedApplication].keyWindow.rootViewController;
-    AVPlayerViewController *pvc = [self findPlayer:root];
-    if (pvc) {
-        pvc.allowsPictureInPicturePlayback = YES;
-        [pvc.pictureInPictureController startPictureInPicture];
+    UIWindow *win = [self keyWindow];
+    AVPlayerViewController *pvc = [self findPlayer:win.rootViewController];
+    if (pvc && pvc.player) {
+        AVPlayerLayer *layer = [AVPlayerLayer playerLayerWithPlayer:pvc.player];
+        if ([AVPictureInPictureController isPictureInPictureSupported]) {
+            pipController = [[AVPictureInPictureController alloc] initWithPlayerLayer:layer];
+            [pipController startPictureInPicture];
+        }
     }
 }
 
