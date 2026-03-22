@@ -23,9 +23,9 @@ jobs:
 
       - name: Download IPA
         run: |
-          FILE_ID="1ejJZsytM3TN8GHV2ahCM6j0YFEREiEJY"
-          pip3 install gdown
-          gdown "https://drive.google.com/uc?id=${FILE_ID}" -O MyApp.ipa
+          curl -L \
+            "https://github.com/kensupa1176/pip-tweak/releases/download/v1.0/MyApp.ipa" \
+            -o MyApp.ipa
           ls -lh MyApp.ipa
 
       - name: Inject dylib
