@@ -1,4 +1,4 @@
-name: Build PiP IPA2
+name: Build PiP IPA3
 
 on: [push]
 
@@ -24,7 +24,7 @@ jobs:
       - name: Download IPA
         run: |
           curl -L \
-            "https://github.com/kensupa1176/pip-tweak/releases/download/v1.0/MyApp.ipa" \
+            "https://github.com/kensupa1176/pip-tweak/releases/download/v1.0/Netflix.ipa" \
             -o MyApp.ipa
           ls -lh MyApp.ipa
 
