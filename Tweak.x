@@ -1,5 +1,6 @@
 #import <UIKit/UIKit.h>
 #import <AVKit/AVKit.h>
+#import <AVFoundation/AVFoundation.h>
 
 static UIWindow *floatWindow;
 static AVPictureInPictureController *pipController;
@@ -19,7 +20,7 @@ static AVPictureInPictureController *pipController;
 + (void)show;
 + (void)onTap;
 + (void)onPan:(UIPanGestureRecognizer *)pan;
-+ (AVPlayerViewController *)findPlayer:(UIViewController *)vc;
++ (AVPlayerLayer *)findPlayerLayer:(CALayer *)layer;
 @end
 
 @implementation PiPButton
@@ -67,38 +68,53 @@ static AVPictureInPictureController *pipController;
 
 + (void)onTap {
     @try {
+        if (![AVPictureInPictureController isPictureInPictureSupported]) {
+            NSLog(@"[PiPTweak] PiP not supported on this device");
+            return;
+        }
+
         UIWindowScene *ws = nil;
         for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
             if ([s isKindOfClass:[UIWindowScene class]]) {
                 ws = (UIWindowScene *)s; break;
             }
         }
-        UIWindow *win = ws.windows.firstObject;
-        if (!win) return;
+        if (!ws) return;
 
-        AVPlayerViewController *pvc = [self findPlayer:win.rootViewController];
-        if (pvc && pvc.player) {
-            AVPlayerLayer *layer = [AVPlayerLayer playerLayerWithPlayer:pvc.player];
-            if ([AVPictureInPictureController isPictureInPictureSupported]) {
-                pipController = [[AVPictureInPictureController alloc] initWithPlayerLayer:layer];
-                [pipController startPictureInPicture];
-            }
+        AVPlayerLayer *found = nil;
+        for (UIWindow *win in ws.windows) {
+            found = [self findPlayerLayer:win.layer];
+            if (found) break;
+        }
+
+        if (found) {
+            NSLog(@"[PiPTweak] found AVPlayerLayer, starting PiP");
+            pipController = [[AVPictureInPictureController alloc] initWithPlayerLayer:found];
+            pipController.requiresLinearPlayback = NO;
+            dispatch_after(
+                dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
+                dispatch_get_main_queue(), ^{
+                    [pipController startPictureInPicture];
+                }
+            );
         } else {
-            NSLog(@"[PiPTweak] player not found");
+            NSLog(@"[PiPTweak] AVPlayerLayer not found");
         }
     } @catch (NSException *e) {
         NSLog(@"[PiPTweak] tap: %@", e);
     }
 }
 
-+ (AVPlayerViewController *)findPlayer:(UIViewController *)vc {
-    if (!vc) return nil;
-    if ([vc isKindOfClass:[AVPlayerViewController class]]) return (AVPlayerViewController *)vc;
-    for (UIViewController *c in vc.childViewControllers) {
-        AVPlayerViewController *f = [self findPlayer:c];
++ (AVPlayerLayer *)findPlayerLayer:(CALayer *)layer {
+    if (!layer) return nil;
+    if ([layer isKindOfClass:[AVPlayerLayer class]]) {
+        AVPlayerLayer *pl = (AVPlayerLayer *)layer;
+        if (pl.player) return pl;
+    }
+    for (CALayer *sub in layer.sublayers) {
+        AVPlayerLayer *f = [self findPlayerLayer:sub];
         if (f) return f;
     }
-    if (vc.presentedViewController) return [self findPlayer:vc.presentedViewController];
     return nil;
 }
 
@@ -108,7 +124,6 @@ static AVPictureInPictureController *pipController;
     center.x += d.x;
     center.y += d.y;
 
-    // 画面外に出ないようにする
     CGSize screen = [UIScreen mainScreen].bounds.size;
     center.x = MAX(30, MIN(center.x, screen.width - 30));
     center.y = MAX(60, MIN(center.y, screen.height - 60));
