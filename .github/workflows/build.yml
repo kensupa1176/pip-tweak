@@ -24,18 +24,9 @@ jobs:
       - name: Download IPA
         run: |
           FILE_ID="1ejJZsytM3TN8GHV2ahCM6j0YFEREiEJY"
-          curl -c /tmp/cookies.txt -s \
-            "https://drive.google.com/uc?export=download&id=${FILE_ID}" > /tmp/page.html
-          CONFIRM=$(grep -o 'confirm=[^&"]*' /tmp/page.html | head -1 | cut -d= -f2)
-          if [ -n "$CONFIRM" ]; then
-            curl -L -b /tmp/cookies.txt \
-              "https://drive.google.com/uc?export=download&confirm=${CONFIRM}&id=${FILE_ID}" \
-              -o MyApp.ipa
-          else
-            curl -L \
-              "https://drive.google.com/uc?export=download&id=${FILE_ID}" \
-              -o MyApp.ipa
-          fi
+          pip3 install gdown
+          gdown "https://drive.google.com/uc?id=${FILE_ID}" -O MyApp.ipa
+          ls -lh MyApp.ipa
 
       - name: Inject dylib
         run: |
