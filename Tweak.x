@@ -1,9 +1,34 @@
 #import <UIKit/UIKit.h>
 #import <AVKit/AVKit.h>
 #import <AVFoundation/AVFoundation.h>
+#import <objc/runtime.h>
 
 static UIWindow *floatWindow;
 static AVPictureInPictureController *pipController;
+static AVPlayer *capturedPlayer = nil;
+static AVPlayerLayer *pipPlayerLayer = nil;
+static UIView *hiddenPlayerView = nil;
+
+// AVPlayer initをフックしてインスタンスを捕まえる
+static id (*orig_initWithPlayerItem)(id, SEL, id) = NULL;
+static id swizzled_initWithPlayerItem(id self, SEL _cmd, id item) {
+    id player = orig_initWithPlayerItem(self, _cmd, item);
+    if (player) {
+        capturedPlayer = player;
+        NSLog(@"[PiPTweak] captured AVPlayer");
+    }
+    return player;
+}
+
+static id (*orig_initWithURL)(id, SEL, id) = NULL;
+static id swizzled_initWithURL(id self, SEL _cmd, id url) {
+    id player = orig_initWithURL(self, _cmd, url);
+    if (player) {
+        capturedPlayer = player;
+        NSLog(@"[PiPTweak] captured AVPlayer via URL");
+    }
+    return player;
+}
 
 @interface PassthroughWindow : UIWindow
 @end
@@ -20,7 +45,6 @@ static AVPictureInPictureController *pipController;
 + (void)show;
 + (void)onTap;
 + (void)onPan:(UIPanGestureRecognizer *)pan;
-+ (AVPlayerLayer *)findPlayerLayer:(CALayer *)layer;
 @end
 
 @implementation PiPButton
@@ -73,49 +97,68 @@ static AVPictureInPictureController *pipController;
             return;
         }
 
-        UIWindowScene *ws = nil;
-        for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
-            if ([s isKindOfClass:[UIWindowScene class]]) {
-                ws = (UIWindowScene *)s; break;
-            }
-        }
-        if (!ws) return;
-
-        AVPlayerLayer *found = nil;
-        for (UIWindow *win in ws.windows) {
-            found = [self findPlayerLayer:win.layer];
-            if (found) break;
+        if (!capturedPlayer) {
+            NSLog(@"[PiPTweak] no player yet - play a video first");
+            return;
         }
 
-        if (found) {
-            NSLog(@"[PiPTweak] found AVPlayerLayer, starting PiP");
-            pipController = [[AVPictureInPictureController alloc] initWithPlayerLayer:found];
-            pipController.requiresLinearPlayback = NO;
-            dispatch_after(
-                dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
-                dispatch_get_main_queue(), ^{
-                    [pipController startPictureInPicture];
+        // オーディオセッション設定
+        [[AVAudioSession sharedInstance]
+            setCategory:AVAudioSessionCategoryPlayback
+            error:nil];
+        [[AVAudioSession sharedInstance] setActive:YES error:nil];
+
+        // 非表示のviewにAVPlayerLayerを追加
+        if (!hiddenPlayerView) {
+            UIWindowScene *ws = nil;
+            for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
+                if ([s isKindOfClass:[UIWindowScene class]]) {
+                    ws = (UIWindowScene *)s; break;
                 }
-            );
-        } else {
-            NSLog(@"[PiPTweak] AVPlayerLayer not found");
+            }
+            UIWindow *mainWin = ws.windows.firstObject;
+            hiddenPlayerView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 1, 1)];
+            hiddenPlayerView.alpha = 0.01;
+            [mainWin addSubview:hiddenPlayerView];
         }
+
+        // 既存のpipControllerをクリア
+        if (pipController) {
+            [pipController stopPictureInPicture];
+            pipController = nil;
+        }
+        if (pipPlayerLayer) {
+            [pipPlayerLayer removeFromSuperlayer];
+            pipPlayerLayer = nil;
+        }
+
+        pipPlayerLayer = [AVPlayerLayer playerLayerWithPlayer:capturedPlayer];
+        pipPlayerLayer.frame = hiddenPlayerView.bounds;
+        [hiddenPlayerView.layer addSublayer:pipPlayerLayer];
+
+        pipController = [[AVPictureInPictureController alloc] initWithPlayerLayer:pipPlayerLayer];
+
+        // PiPが準備できるまで待つ
+        dispatch_after(
+            dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)),
+            dispatch_get_main_queue(), ^{
+                if ([pipController isPictureInPicturePossible]) {
+                    [pipController startPictureInPicture];
+                    NSLog(@"[PiPTweak] PiP started");
+                } else {
+                    NSLog(@"[PiPTweak] not possible yet, retrying...");
+                    dispatch_after(
+                        dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)),
+                        dispatch_get_main_queue(), ^{
+                            [pipController startPictureInPicture];
+                        }
+                    );
+                }
+            }
+        );
     } @catch (NSException *e) {
         NSLog(@"[PiPTweak] tap: %@", e);
     }
-}
-
-+ (AVPlayerLayer *)findPlayerLayer:(CALayer *)layer {
-    if (!layer) return nil;
-    if ([layer isKindOfClass:[AVPlayerLayer class]]) {
-        AVPlayerLayer *pl = (AVPlayerLayer *)layer;
-        if (pl.player) return pl;
-    }
-    for (CALayer *sub in layer.sublayers) {
-        AVPlayerLayer *f = [self findPlayerLayer:sub];
-        if (f) return f;
-    }
-    return nil;
 }
 
 + (void)onPan:(UIPanGestureRecognizer *)pan {
@@ -123,11 +166,9 @@ static AVPictureInPictureController *pipController;
     CGPoint center = floatWindow.center;
     center.x += d.x;
     center.y += d.y;
-
     CGSize screen = [UIScreen mainScreen].bounds.size;
     center.x = MAX(30, MIN(center.x, screen.width - 30));
     center.y = MAX(60, MIN(center.y, screen.height - 60));
-
     floatWindow.center = center;
     [pan setTranslation:CGPointZero inView:floatWindow];
 }
@@ -136,6 +177,22 @@ static AVPictureInPictureController *pipController;
 
 __attribute__((constructor))
 static void PiPTweakInit() {
+    Class playerClass = [AVPlayer class];
+
+    Method m1 = class_getInstanceMethod(playerClass, @selector(initWithPlayerItem:));
+    if (m1) {
+        orig_initWithPlayerItem = (id(*)(id,SEL,id))method_getImplementation(m1);
+        method_setImplementation(m1, (IMP)swizzled_initWithPlayerItem);
+    }
+
+    Method m2 = class_getInstanceMethod(playerClass, @selector(initWithURL:));
+    if (m2) {
+        orig_initWithURL = (id(*)(id,SEL,id))method_getImplementation(m2);
+        method_setImplementation(m2, (IMP)swizzled_initWithURL);
+    }
+
+    NSLog(@"[PiPTweak] initialized");
+
     dispatch_after(
         dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
         dispatch_get_main_queue(), ^{
