@@ -1,6 +1,5 @@
 #import <UIKit/UIKit.h>
 #import <WebKit/WebKit.h>
-#import <objc/runtime.h>
 
 static UIWindow *floatWindow;
 static UILabel *statusLabel;
@@ -75,9 +74,24 @@ static WKWebView *findWebView(UIView *view) {
 
         [floatWindow.rootViewController.view addSubview:btn];
         [floatWindow.rootViewController.view addSubview:statusLabel];
-    } @catch (NSException *e) {
-        NSLog(@"[PiPTweak] show: %@", e);
+    } @catch (NSException *e) {}
+}
+
++ (void)showAlert:(NSString *)message {
+    UIWindowScene *ws = nil;
+    for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
+        if ([s isKindOfClass:[UIWindowScene class]]) {
+            ws = (UIWindowScene *)s; break;
+        }
     }
+    UIWindow *win = ws.windows.firstObject;
+    UIAlertController *alert = [UIAlertController
+        alertControllerWithTitle:@"PiPTweak Debug"
+        message:message
+        preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"OK"
+        style:UIAlertActionStyleDefault handler:nil]];
+    [win.rootViewController presentViewController:alert animated:YES completion:nil];
 }
 
 + (void)onTap {
@@ -97,45 +111,37 @@ static WKWebView *findWebView(UIView *view) {
         }
 
         if (!webView) {
+            [self showAlert:@"WKWebViewが見つかりません"];
             statusLabel.text = @"WebViewなし";
             return;
         }
 
-        statusLabel.text = @"JS注入中";
+        statusLabel.text = @"調査中";
 
         NSString *js = @""
             "(function() {"
             "  var info = {};"
             "  info.videos = document.querySelectorAll('video').length;"
             "  info.iframes = document.querySelectorAll('iframe').length;"
-            "  info.title = document.title;"
-            "  info.url = location.href.substring(0, 50);"
-            "  var allTags = document.querySelectorAll('*');"
-            "  var tagNames = {};"
-            "  for (var i = 0; i < Math.min(allTags.length, 200); i++) {"
-            "    var t = allTags[i].tagName;"
-            "    tagNames[t] = (tagNames[t] || 0) + 1;"
-            "  }"
-            "  info.tags = JSON.stringify(tagNames);"
+            "  info.title = document.title.substring(0,30);"
+            "  info.url = location.href.substring(0,80);"
             "  return JSON.stringify(info);"
             "})();";
 
         [webView evaluateJavaScript:js completionHandler:^(id result, NSError *error) {
             dispatch_async(dispatch_get_main_queue(), ^{
                 if (error) {
+                    [PiPButton showAlert:[NSString stringWithFormat:@"エラー:\n%@", error.localizedDescription]];
                     statusLabel.text = @"JSエラー";
-                    NSLog(@"[PiPTweak] JS error: %@", error);
                 } else {
-                    NSLog(@"[PiPTweak] JS result: %@", result);
-                    // ラベルには短く表示
-                    NSString *str = [NSString stringWithFormat:@"%@", result ?: @"?"];
-                    statusLabel.text = str.length > 12 ? [str substringToIndex:12] : str;
+                    NSString *str = [NSString stringWithFormat:@"%@", result ?: @"nil"];
+                    [PiPButton showAlert:str];
+                    statusLabel.text = @"確認";
                 }
             });
         }];
     } @catch (NSException *e) {
         statusLabel.text = @"ERR";
-        NSLog(@"[PiPTweak] tap: %@", e);
     }
 }
 
