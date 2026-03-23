@@ -5,7 +5,6 @@
 static UIWindow *floatWindow;
 static UILabel *statusLabel;
 
-
 static WKWebView *findWebView(UIView *view) {
     if ([view isKindOfClass:[WKWebView class]]) return (WKWebView *)view;
     for (UIView *sub in view.subviews) {
@@ -91,7 +90,6 @@ static WKWebView *findWebView(UIView *view) {
         }
         if (!ws) return;
 
-        // WKWebViewを探す
         WKWebView *webView = nil;
         for (UIWindow *win in ws.windows) {
             webView = findWebView(win);
@@ -100,33 +98,43 @@ static WKWebView *findWebView(UIView *view) {
 
         if (!webView) {
             statusLabel.text = @"WebViewなし";
-            NSLog(@"[PiPTweak] no WKWebView found");
             return;
         }
 
         statusLabel.text = @"JS注入中";
 
-        // video要素にPiPを起動するJS
         NSString *js = @""
-            "var videos = document.querySelectorAll('video');"
-            "var result = '動画なし';"
-            "for (var i = 0; i < videos.length; i++) {"
-            "  var v = videos[i];"
-            "  if (!v.paused || v.currentTime > 0) {"
+            "(function() {"
+            "  function tryPiP(v) {"
             "    if (v.webkitSupportsPresentationMode && v.webkitSupportsPresentationMode('picture-in-picture')) {"
             "      v.webkitSetPresentationMode('picture-in-picture');"
-            "      result = 'OK';"
-            "      break;"
+            "      return 'OK-webkit';"
             "    } else if (document.pictureInPictureEnabled) {"
             "      v.requestPictureInPicture();"
-            "      result = 'OK2';"
-            "      break;"
-            "    } else {"
-            "      result = '非対応';"
+            "      return 'OK-pip';"
             "    }"
+            "    return null;"
             "  }"
-            "}"
-            "result;";
+            "  function findVideos(doc) {"
+            "    try {"
+            "      var videos = doc.querySelectorAll('video');"
+            "      for (var i = 0; i < videos.length; i++) {"
+            "        var r = tryPiP(videos[i]);"
+            "        if (r) return r;"
+            "      }"
+            "      var iframes = doc.querySelectorAll('iframe');"
+            "      for (var i = 0; i < iframes.length; i++) {"
+            "        try {"
+            "          var r = findVideos(iframes[i].contentDocument);"
+            "          if (r) return r;"
+            "        } catch(e) {}"
+            "      }"
+            "    } catch(e) {}"
+            "    return null;"
+            "  }"
+            "  var r = findVideos(document);"
+            "  return r || '動画なし';"
+            "})();";
 
         [webView evaluateJavaScript:js completionHandler:^(id result, NSError *error) {
             dispatch_async(dispatch_get_main_queue(), ^{
