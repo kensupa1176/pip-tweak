@@ -105,35 +105,19 @@ static WKWebView *findWebView(UIView *view) {
 
         NSString *js = @""
             "(function() {"
-            "  function tryPiP(v) {"
-            "    if (v.webkitSupportsPresentationMode && v.webkitSupportsPresentationMode('picture-in-picture')) {"
-            "      v.webkitSetPresentationMode('picture-in-picture');"
-            "      return 'OK-webkit';"
-            "    } else if (document.pictureInPictureEnabled) {"
-            "      v.requestPictureInPicture();"
-            "      return 'OK-pip';"
-            "    }"
-            "    return null;"
+            "  var info = {};"
+            "  info.videos = document.querySelectorAll('video').length;"
+            "  info.iframes = document.querySelectorAll('iframe').length;"
+            "  info.title = document.title;"
+            "  info.url = location.href.substring(0, 50);"
+            "  var allTags = document.querySelectorAll('*');"
+            "  var tagNames = {};"
+            "  for (var i = 0; i < Math.min(allTags.length, 200); i++) {"
+            "    var t = allTags[i].tagName;"
+            "    tagNames[t] = (tagNames[t] || 0) + 1;"
             "  }"
-            "  function findVideos(doc) {"
-            "    try {"
-            "      var videos = doc.querySelectorAll('video');"
-            "      for (var i = 0; i < videos.length; i++) {"
-            "        var r = tryPiP(videos[i]);"
-            "        if (r) return r;"
-            "      }"
-            "      var iframes = doc.querySelectorAll('iframe');"
-            "      for (var i = 0; i < iframes.length; i++) {"
-            "        try {"
-            "          var r = findVideos(iframes[i].contentDocument);"
-            "          if (r) return r;"
-            "        } catch(e) {}"
-            "      }"
-            "    } catch(e) {}"
-            "    return null;"
-            "  }"
-            "  var r = findVideos(document);"
-            "  return r || '動画なし';"
+            "  info.tags = JSON.stringify(tagNames);"
+            "  return JSON.stringify(info);"
             "})();";
 
         [webView evaluateJavaScript:js completionHandler:^(id result, NSError *error) {
@@ -142,8 +126,10 @@ static WKWebView *findWebView(UIView *view) {
                     statusLabel.text = @"JSエラー";
                     NSLog(@"[PiPTweak] JS error: %@", error);
                 } else {
-                    statusLabel.text = [NSString stringWithFormat:@"%@", result ?: @"?"];
                     NSLog(@"[PiPTweak] JS result: %@", result);
+                    // ラベルには短く表示
+                    NSString *str = [NSString stringWithFormat:@"%@", result ?: @"?"];
+                    statusLabel.text = str.length > 12 ? [str substringToIndex:12] : str;
                 }
             });
         }];
