@@ -1,36 +1,20 @@
 #import <UIKit/UIKit.h>
-#import <AVKit/AVKit.h>
-#import <AVFoundation/AVFoundation.h>
+#import <WebKit/WebKit.h>
 #import <objc/runtime.h>
 
 static UIWindow *floatWindow;
-static AVPictureInPictureController *pipController;
-static NSMutableArray *capturedPlayers = nil;
-static UILabel *statusLabel = nil;
-static UIView *pipHostView = nil;
+static UILabel *statusLabel;
 
-static id (*orig_initWithPlayerItem)(id, SEL, id) = NULL;
-static id swizzled_initWithPlayerItem(id self, SEL _cmd, id item) {
-    id player = orig_initWithPlayerItem(self, _cmd, item);
-    if (player && ![capturedPlayers containsObject:player]) {
-        [capturedPlayers addObject:player];
-        dispatch_async(dispatch_get_main_queue(), ^{
-            statusLabel.text = [NSString stringWithFormat:@"▶%lu", (unsigned long)capturedPlayers.count];
-        });
-    }
-    return player;
-}
+// 全WKWebViewを収集
+static NSMutableArray *webViews = nil;
 
-static id (*orig_initWithURL)(id, SEL, id) = NULL;
-static id swizzled_initWithURL(id self, SEL _cmd, id url) {
-    id player = orig_initWithURL(self, _cmd, url);
-    if (player && ![capturedPlayers containsObject:player]) {
-        [capturedPlayers addObject:player];
-        dispatch_async(dispatch_get_main_queue(), ^{
-            statusLabel.text = [NSString stringWithFormat:@"▶%lu", (unsigned long)capturedPlayers.count];
-        });
+static WKWebView *findWebView(UIView *view) {
+    if ([view isKindOfClass:[WKWebView class]]) return (WKWebView *)view;
+    for (UIView *sub in view.subviews) {
+        WKWebView *found = findWebView(sub);
+        if (found) return found;
     }
-    return player;
+    return nil;
 }
 
 @interface PassthroughWindow : UIWindow
@@ -63,7 +47,7 @@ static id swizzled_initWithURL(id self, SEL _cmd, id url) {
         if (!ws) return;
 
         floatWindow = [[PassthroughWindow alloc] initWithWindowScene:ws];
-        floatWindow.frame = CGRectMake(20, 120, 70, 80);
+        floatWindow.frame = CGRectMake(20, 120, 70, 85);
         floatWindow.windowLevel = UIWindowLevelAlert + 100;
         floatWindow.backgroundColor = [UIColor clearColor];
         floatWindow.rootViewController = [UIViewController new];
@@ -86,12 +70,11 @@ static id swizzled_initWithURL(id self, SEL _cmd, id url) {
             initWithTarget:self action:@selector(onPan:)];
         [btn addGestureRecognizer:pan];
 
-        // プレイヤー数表示ラベル
-        statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 65, 70, 15)];
+        statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 67, 70, 16)];
         statusLabel.textColor = [UIColor yellowColor];
         statusLabel.font = [UIFont systemFontOfSize:10];
         statusLabel.textAlignment = NSTextAlignmentCenter;
-        statusLabel.text = @"0";
+        statusLabel.text = @"待機";
 
         [floatWindow.rootViewController.view addSubview:btn];
         [floatWindow.rootViewController.view addSubview:statusLabel];
@@ -102,64 +85,62 @@ static id swizzled_initWithURL(id self, SEL _cmd, id url) {
 
 + (void)onTap {
     @try {
-        if (![AVPictureInPictureController isPictureInPictureSupported]) {
-            statusLabel.text = @"非対応";
+        UIWindowScene *ws = nil;
+        for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
+            if ([s isKindOfClass:[UIWindowScene class]]) {
+                ws = (UIWindowScene *)s; break;
+            }
+        }
+        if (!ws) return;
+
+        // WKWebViewを探す
+        WKWebView *webView = nil;
+        for (UIWindow *win in ws.windows) {
+            webView = findWebView(win);
+            if (webView) break;
+        }
+
+        if (!webView) {
+            statusLabel.text = @"WebViewなし";
+            NSLog(@"[PiPTweak] no WKWebView found");
             return;
         }
 
-        if (capturedPlayers.count == 0) {
-            statusLabel.text = @"なし";
-            return;
-        }
+        statusLabel.text = @"JS注入中";
 
-        [[AVAudioSession sharedInstance]
-            setCategory:AVAudioSessionCategoryPlayback error:nil];
-        [[AVAudioSession sharedInstance] setActive:YES error:nil];
+        // video要素にPiPを起動するJS
+        NSString *js = @""
+            "var videos = document.querySelectorAll('video');"
+            "var result = '動画なし';"
+            "for (var i = 0; i < videos.length; i++) {"
+            "  var v = videos[i];"
+            "  if (!v.paused || v.currentTime > 0) {"
+            "    if (v.webkitSupportsPresentationMode && v.webkitSupportsPresentationMode('picture-in-picture')) {"
+            "      v.webkitSetPresentationMode('picture-in-picture');"
+            "      result = 'OK';"
+            "      break;"
+            "    } else if (document.pictureInPictureEnabled) {"
+            "      v.requestPictureInPicture();"
+            "      result = 'OK2';"
+            "      break;"
+            "    } else {"
+            "      result = '非対応';"
+            "    }"
+            "  }"
+            "}"
+            "result;";
 
-        // 全プレイヤーを試す
-        for (AVPlayer *player in [capturedPlayers reverseObjectEnumerator]) {
-            if (!player) continue;
-
-            if (!pipHostView) {
-                UIWindowScene *ws = nil;
-                for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
-                    if ([s isKindOfClass:[UIWindowScene class]]) {
-                        ws = (UIWindowScene *)s; break;
-                    }
+        [webView evaluateJavaScript:js completionHandler:^(id result, NSError *error) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (error) {
+                    statusLabel.text = @"JSエラー";
+                    NSLog(@"[PiPTweak] JS error: %@", error);
+                } else {
+                    statusLabel.text = [NSString stringWithFormat:@"%@", result ?: @"?"];
+                    NSLog(@"[PiPTweak] JS result: %@", result);
                 }
-                UIWindow *mainWin = ws.windows.firstObject;
-                pipHostView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 10, 10)];
-                pipHostView.alpha = 0.01;
-                [mainWin addSubview:pipHostView];
-            }
-
-            if (pipController) {
-                [pipController stopPictureInPicture];
-                pipController = nil;
-            }
-
-            AVPlayerLayer *layer = [AVPlayerLayer playerLayerWithPlayer:player];
-            layer.frame = pipHostView.bounds;
-            [pipHostView.layer addSublayer:layer];
-
-            pipController = [[AVPictureInPictureController alloc] initWithPlayerLayer:layer];
-
-            NSInteger idx = [capturedPlayers indexOfObject:player];
-            statusLabel.text = [NSString stringWithFormat:@"P%ld試中", (long)idx];
-
-            dispatch_after(
-                dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
-                dispatch_get_main_queue(), ^{
-                    if ([pipController isPictureInPicturePossible]) {
-                        [pipController startPictureInPicture];
-                        statusLabel.text = @"OK!";
-                    } else {
-                        statusLabel.text = @"NG";
-                    }
-                }
-            );
-            break;
-        }
+            });
+        }];
     } @catch (NSException *e) {
         statusLabel.text = @"ERR";
         NSLog(@"[PiPTweak] tap: %@", e);
@@ -182,22 +163,6 @@ static id swizzled_initWithURL(id self, SEL _cmd, id url) {
 
 __attribute__((constructor))
 static void PiPTweakInit() {
-    capturedPlayers = [NSMutableArray array];
-
-    Class playerClass = [AVPlayer class];
-
-    Method m1 = class_getInstanceMethod(playerClass, @selector(initWithPlayerItem:));
-    if (m1) {
-        orig_initWithPlayerItem = (id(*)(id,SEL,id))method_getImplementation(m1);
-        method_setImplementation(m1, (IMP)swizzled_initWithPlayerItem);
-    }
-
-    Method m2 = class_getInstanceMethod(playerClass, @selector(initWithURL:));
-    if (m2) {
-        orig_initWithURL = (id(*)(id,SEL,id))method_getImplementation(m2);
-        method_setImplementation(m2, (IMP)swizzled_initWithURL);
-    }
-
     dispatch_after(
         dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
         dispatch_get_main_queue(), ^{
