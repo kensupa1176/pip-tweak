@@ -5,8 +5,6 @@
 static UIWindow *floatWindow;
 static UILabel *statusLabel;
 
-// 全WKWebViewを収集
-static NSMutableArray *webViews = nil;
 
 static WKWebView *findWebView(UIView *view) {
     if ([view isKindOfClass:[WKWebView class]]) return (WKWebView *)view;
