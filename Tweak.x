@@ -5,15 +5,6 @@ static UIWindow *floatWindow;
 static UIWindow *alertWindow;
 static UILabel *statusLabel;
 
-static WKWebView *findWebView(UIView *view) {
-    if ([view isKindOfClass:[WKWebView class]]) return (WKWebView *)view;
-    for (UIView *sub in view.subviews) {
-        WKWebView *found = findWebView(sub);
-        if (found) return found;
-    }
-    return nil;
-}
-
 @interface PassthroughWindow : UIWindow
 @end
 @implementation PassthroughWindow
@@ -29,6 +20,7 @@ static WKWebView *findWebView(UIView *view) {
 + (void)onTap;
 + (void)onPan:(UIPanGestureRecognizer *)pan;
 + (void)showAlert:(NSString *)message;
++ (void)collectWebViews:(UIView *)view into:(NSMutableArray *)arr;
 @end
 
 @implementation PiPButton
@@ -43,7 +35,6 @@ static WKWebView *findWebView(UIView *view) {
         }
         if (!ws) return;
 
-        // アラート専用ウィンドウを作る
         alertWindow = [[UIWindow alloc] initWithWindowScene:ws];
         alertWindow.windowLevel = UIWindowLevelAlert + 200;
         alertWindow.backgroundColor = [UIColor clearColor];
@@ -63,9 +54,13 @@ static WKWebView *findWebView(UIView *view) {
                 alertWindow.hidden = YES;
                 alertWindow = nil;
             }]];
-
         [vc presentViewController:alert animated:YES completion:nil];
     });
+}
+
++ (void)collectWebViews:(UIView *)view into:(NSMutableArray *)arr {
+    if ([view isKindOfClass:[WKWebView class]]) [arr addObject:view];
+    for (UIView *sub in view.subviews) [self collectWebViews:sub into:arr];
 }
 
 + (void)show {
@@ -124,44 +119,39 @@ static WKWebView *findWebView(UIView *view) {
         }
         if (!ws) return;
 
-        WKWebView *webView = nil;
+        NSMutableArray *allWebViews = [NSMutableArray array];
         for (UIWindow *win in ws.windows) {
-            webView = findWebView(win);
-            if (webView) break;
+            [self collectWebViews:win into:allWebViews];
         }
 
-        if (!webView) {
-            [self showAlert:@"WKWebViewなし"];
+        if (allWebViews.count == 0) {
+            [self showAlert:@"WebViewなし"];
             statusLabel.text = @"WebViewなし";
             return;
         }
 
         statusLabel.text = @"調査中";
 
-        NSString *js = @""
-            "(function() {"
-            "  var info = {};"
-            "  info.videos = document.querySelectorAll('video').length;"
-            "  info.iframes = document.querySelectorAll('iframe').length;"
-            "  info.title = document.title.substring(0,30);"
-            "  info.url = location.href.substring(0,80);"
-            "  return JSON.stringify(info);"
-            "})();";
+        NSMutableString *report = [NSMutableString string];
+        [report appendFormat:@"WebView数: %lu\n\n", (unsigned long)allWebViews.count];
 
-        [webView evaluateJavaScript:js completionHandler:^(id result, NSError *error) {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                if (error) {
-                    [PiPButton showAlert:[NSString stringWithFormat:@"エラー:\n%@", error.localizedDescription]];
-                    statusLabel.text = @"JSエラー";
-                } else {
-                    NSString *str = [NSString stringWithFormat:@"%@", result ?: @"nil"];
-                    [PiPButton showAlert:str];
-                    statusLabel.text = @"OK";
-                }
-            });
-        }];
+        __block NSInteger remaining = allWebViews.count;
+        for (NSInteger i = 0; i < allWebViews.count; i++) {
+            WKWebView *wv = allWebViews[i];
+            NSString *js = @"(function(){ return JSON.stringify({v: document.querySelectorAll('video').length, url: location.href.substring(0,60)}); })();";
+            [wv evaluateJavaScript:js completionHandler:^(id result, NSError *error) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [report appendFormat:@"[%ld]: %@\n", (long)i, result ?: error.localizedDescription];
+                    remaining--;
+                    if (remaining == 0) {
+                        [PiPButton showAlert:report];
+                        statusLabel.text = @"確認";
+                    }
+                });
+            }];
+        }
     } @catch (NSException *e) {
-        [self showAlert:[NSString stringWithFormat:@"例外: %@", e]];
+        [self showAlert:[NSString stringWithFormat:@"ERR: %@", e]];
         statusLabel.text = @"ERR";
     }
 }
