@@ -130,24 +130,40 @@ static UILabel *statusLabel;
             return;
         }
 
-        statusLabel.text = @"調査中";
+        statusLabel.text = @"起動中";
 
-        NSMutableString *report = [NSMutableString string];
-        [report appendFormat:@"WebView数: %lu\n\n", (unsigned long)allWebViews.count];
+        for (WKWebView *wv in allWebViews) {
+            NSString *js = @""
+                "(function() {"
+                "  var videos = document.querySelectorAll('video');"
+                "  for (var i = 0; i < videos.length; i++) {"
+                "    var v = videos[i];"
+                "    if (v.webkitSupportsPresentationMode && v.webkitSupportsPresentationMode('picture-in-picture')) {"
+                "      v.webkitSetPresentationMode('picture-in-picture');"
+                "      return 'OK-webkit:' + location.href.substring(0,30);"
+                "    }"
+                "    if (document.pictureInPictureEnabled) {"
+                "      v.requestPictureInPicture();"
+                "      return 'OK-pip:' + location.href.substring(0,30);"
+                "    }"
+                "    return 'NG:' + location.href.substring(0,30);"
+                "  }"
+                "  return null;"
+                "})();";
 
-        __block NSInteger remaining = allWebViews.count;
-        for (NSInteger i = 0; i < allWebViews.count; i++) {
-            WKWebView *wv = allWebViews[i];
-            NSString *js = @"(function(){ return JSON.stringify({v: document.querySelectorAll('video').length, url: location.href.substring(0,60)}); })();";
             [wv evaluateJavaScript:js completionHandler:^(id result, NSError *error) {
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    [report appendFormat:@"[%ld]: %@\n", (long)i, result ?: error.localizedDescription];
-                    remaining--;
-                    if (remaining == 0) {
-                        [PiPButton showAlert:report];
-                        statusLabel.text = @"確認";
-                    }
-                });
+                if (result && ![result isEqual:[NSNull null]]) {
+                    NSString *str = [NSString stringWithFormat:@"%@", result];
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        if ([str hasPrefix:@"OK"]) {
+                            statusLabel.text = @"OK!";
+                        } else if ([str hasPrefix:@"NG"]) {
+                            statusLabel.text = @"NG";
+                            [PiPButton showAlert:[NSString stringWithFormat:@"PiP非対応:\n%@", str]];
+                        }
+                        NSLog(@"[PiPTweak] result: %@", str);
+                    });
+                }
             }];
         }
     } @catch (NSException *e) {
