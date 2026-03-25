@@ -1,9 +1,38 @@
 #import <UIKit/UIKit.h>
 #import <WebKit/WebKit.h>
+#import <objc/runtime.h>
+#import <objc/message.h>
 
 static UIWindow *floatWindow;
 static UIWindow *alertWindow;
 static UILabel *statusLabel;
+
+static id (*orig_initWithFrame_config)(id, SEL, CGRect, id) = NULL;
+static id swizzled_initWithFrame_config(id self, SEL _cmd, CGRect frame, WKWebViewConfiguration *config) {
+    config.allowsPictureInPictureMediaPlayback = YES;
+    config.mediaTypesRequiringUserActionForPlayback = WKAudiovisualMediaTypeNone;
+
+    NSString *src = @""
+        "(function(){"
+        "  function setup(){"
+        "    document.querySelectorAll('video').forEach(function(v){"
+        "      v.setAttribute('playsinline','');"
+        "      v.setAttribute('webkit-playsinline','');"
+        "      v.setAttribute('x-webkit-airplay','allow');"
+        "    });"
+        "  }"
+        "  new MutationObserver(setup).observe(document.documentElement,{childList:true,subtree:true});"
+        "  setup();"
+        "})();";
+
+    WKUserScript *script = [[WKUserScript alloc]
+        initWithSource:src
+        injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+        forMainFrameOnly:NO];
+    [config.userContentController addUserScript:script];
+
+    return orig_initWithFrame_config(self, _cmd, frame, config);
+}
 
 @interface PassthroughWindow : UIWindow
 @end
@@ -19,22 +48,19 @@ static UILabel *statusLabel;
 + (void)show;
 + (void)onTap;
 + (void)onPan:(UIPanGestureRecognizer *)pan;
-+ (void)showAlert:(NSString *)message;
++ (void)showAlert:(NSString *)msg;
 + (void)collectWebViews:(UIView *)view into:(NSMutableArray *)arr;
++ (void)triggerPiP:(WKWebView *)wv;
 @end
 
 @implementation PiPButton
 
-+ (void)showAlert:(NSString *)message {
++ (void)showAlert:(NSString *)msg {
     dispatch_async(dispatch_get_main_queue(), ^{
         UIWindowScene *ws = nil;
-        for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
-            if ([s isKindOfClass:[UIWindowScene class]]) {
-                ws = (UIWindowScene *)s; break;
-            }
-        }
+        for (UIScene *s in [UIApplication sharedApplication].connectedScenes)
+            if ([s isKindOfClass:[UIWindowScene class]]) { ws=(UIWindowScene*)s; break; }
         if (!ws) return;
-
         alertWindow = [[UIWindow alloc] initWithWindowScene:ws];
         alertWindow.windowLevel = UIWindowLevelAlert + 200;
         alertWindow.backgroundColor = [UIColor clearColor];
@@ -42,18 +68,12 @@ static UILabel *statusLabel;
         alertWindow.rootViewController = vc;
         alertWindow.hidden = NO;
         [alertWindow makeKeyAndVisible];
-
         UIAlertController *alert = [UIAlertController
-            alertControllerWithTitle:@"PiP Debug"
-            message:message
+            alertControllerWithTitle:@"PiP" message:msg
             preferredStyle:UIAlertControllerStyleAlert];
-        [alert addAction:[UIAlertAction
-            actionWithTitle:@"OK"
+        [alert addAction:[UIAlertAction actionWithTitle:@"OK"
             style:UIAlertActionStyleDefault
-            handler:^(UIAlertAction *a) {
-                alertWindow.hidden = YES;
-                alertWindow = nil;
-            }]];
+            handler:^(UIAlertAction *a){ alertWindow.hidden=YES; alertWindow=nil; }]];
         [vc presentViewController:alert animated:YES completion:nil];
     });
 }
@@ -63,15 +83,69 @@ static UILabel *statusLabel;
     for (UIView *sub in view.subviews) [self collectWebViews:sub into:arr];
 }
 
++ (void)triggerPiP:(WKWebView *)wv {
+    // 既存WebViewにKVCで強制有効化
+    @try { [wv setValue:@YES forKeyPath:@"configuration.allowsPictureInPictureMediaPlayback"]; } @catch(NSException *e){}
+
+    NSString *js = @""
+        "(function(){"
+        "  var vids=document.querySelectorAll('video');"
+        "  if(!vids.length) return null;"
+        "  var v=vids[0];"
+        "  var dbg='src:'+!!v.currentSrc+' paused:'+v.paused+' webkit:'+(!!v.webkitSupportsPresentationMode);"
+        "  try{"
+        "    if(v.webkitSupportsPresentationMode&&v.webkitSupportsPresentationMode('picture-in-picture')){"
+        "      v.webkitSetPresentationMode('picture-in-picture');"
+        "      return 'OK-webkit';"
+        "    }"
+        "  }catch(e){dbg+=' wkErr:'+e.message;}"
+        "  try{"
+        "    v.requestPictureInPicture();"
+        "    return 'OK-pip';"
+        "  }catch(e){dbg+=' pipErr:'+e.message;}"
+        "  return dbg;"
+        "})();";
+
+    // objc_msgSendでプライベートAPI直接呼び出し (withUserGesture:YES)
+    SEL sel = NSSelectorFromString(@"_evaluateJavaScript:inFrame:inContentWorld:withUserGesture:completionHandler:");
+
+    void (^handler)(id, NSError *) = ^(id result, NSError *error) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (error) {
+                NSLog(@"[PiPTweak] evalError: %@", error.localizedDescription);
+                return;
+            }
+            if (!result || [result isEqual:[NSNull null]]) return;
+            NSString *str = [NSString stringWithFormat:@"%@", result];
+            NSLog(@"[PiPTweak] result: %@", str);
+            if ([str hasPrefix:@"OK"]) {
+                statusLabel.text = @"OK!";
+            } else {
+                [PiPButton showAlert:str];
+                statusLabel.text = @"詳細";
+            }
+        });
+    };
+
+    if ([wv respondsToSelector:sel]) {
+        #pragma clang diagnostic push
+        #pragma clang diagnostic ignored "-Wundeclared-selector"
+        typedef void (*EvalIMP)(id, SEL, NSString*, id, id, BOOL, id);
+        EvalIMP imp = (EvalIMP)objc_msgSend;
+        imp(wv, sel, js, nil, WKContentWorld.pageWorld, YES, handler);
+        #pragma clang diagnostic pop
+    } else {
+        // フォールバック
+        [wv evaluateJavaScript:js completionHandler:handler];
+    }
+}
+
 + (void)show {
     if (floatWindow) return;
     @try {
         UIWindowScene *ws = nil;
-        for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
-            if ([s isKindOfClass:[UIWindowScene class]]) {
-                ws = (UIWindowScene *)s; break;
-            }
-        }
+        for (UIScene *s in [UIApplication sharedApplication].connectedScenes)
+            if ([s isKindOfClass:[UIWindowScene class]]) { ws=(UIWindowScene*)s; break; }
         if (!ws) return;
 
         floatWindow = [[PassthroughWindow alloc] initWithWindowScene:ws];
@@ -112,75 +186,32 @@ static UILabel *statusLabel;
 + (void)onTap {
     @try {
         UIWindowScene *ws = nil;
-        for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
-            if ([s isKindOfClass:[UIWindowScene class]]) {
-                ws = (UIWindowScene *)s; break;
-            }
-        }
+        for (UIScene *s in [UIApplication sharedApplication].connectedScenes)
+            if ([s isKindOfClass:[UIWindowScene class]]) { ws=(UIWindowScene*)s; break; }
         if (!ws) return;
 
-        NSMutableArray *allWebViews = [NSMutableArray array];
-        for (UIWindow *win in ws.windows) {
-            [self collectWebViews:win into:allWebViews];
-        }
+        NSMutableArray *all = [NSMutableArray array];
+        for (UIWindow *win in ws.windows) [self collectWebViews:win into:all];
 
-        if (allWebViews.count == 0) {
-            [self showAlert:@"WebViewなし"];
-            statusLabel.text = @"WebViewなし";
-            return;
-        }
+        if (!all.count) { [self showAlert:@"WebViewなし"]; return; }
 
         statusLabel.text = @"起動中";
+        for (WKWebView *wv in all) [self triggerPiP:wv];
 
-        for (WKWebView *wv in allWebViews) {
-            NSString *js = @""
-                "(function() {"
-                "  var videos = document.querySelectorAll('video');"
-                "  for (var i = 0; i < videos.length; i++) {"
-                "    var v = videos[i];"
-                "    if (v.webkitSupportsPresentationMode && v.webkitSupportsPresentationMode('picture-in-picture')) {"
-                "      v.webkitSetPresentationMode('picture-in-picture');"
-                "      return 'OK-webkit:' + location.href.substring(0,30);"
-                "    }"
-                "    if (document.pictureInPictureEnabled) {"
-                "      v.requestPictureInPicture();"
-                "      return 'OK-pip:' + location.href.substring(0,30);"
-                "    }"
-                "    return 'NG:' + location.href.substring(0,30);"
-                "  }"
-                "  return null;"
-                "})();";
-
-            [wv evaluateJavaScript:js completionHandler:^(id result, NSError *error) {
-                if (result && ![result isEqual:[NSNull null]]) {
-                    NSString *str = [NSString stringWithFormat:@"%@", result];
-                    dispatch_async(dispatch_get_main_queue(), ^{
-                        if ([str hasPrefix:@"OK"]) {
-                            statusLabel.text = @"OK!";
-                        } else if ([str hasPrefix:@"NG"]) {
-                            statusLabel.text = @"NG";
-                            [PiPButton showAlert:[NSString stringWithFormat:@"PiP非対応:\n%@", str]];
-                        }
-                        NSLog(@"[PiPTweak] result: %@", str);
-                    });
-                }
-            }];
-        }
     } @catch (NSException *e) {
-        [self showAlert:[NSString stringWithFormat:@"ERR: %@", e]];
+        [self showAlert:[NSString stringWithFormat:@"ERR:%@",e]];
         statusLabel.text = @"ERR";
     }
 }
 
 + (void)onPan:(UIPanGestureRecognizer *)pan {
     CGPoint d = [pan translationInView:floatWindow];
-    CGPoint center = floatWindow.center;
-    center.x += d.x;
-    center.y += d.y;
-    CGSize screen = [UIScreen mainScreen].bounds.size;
-    center.x = MAX(35, MIN(center.x, screen.width - 35));
-    center.y = MAX(60, MIN(center.y, screen.height - 60));
-    floatWindow.center = center;
+    CGPoint c = floatWindow.center;
+    c.x += d.x; c.y += d.y;
+    CGSize s = [UIScreen mainScreen].bounds.size;
+    c.x = MAX(35, MIN(c.x, s.width-35));
+    c.y = MAX(60, MIN(c.y, s.height-60));
+    floatWindow.center = c;
     [pan setTranslation:CGPointZero inView:floatWindow];
 }
 
@@ -188,10 +219,12 @@ static UILabel *statusLabel;
 
 __attribute__((constructor))
 static void PiPTweakInit() {
-    dispatch_after(
-        dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
-        dispatch_get_main_queue(), ^{
-            [PiPButton show];
-        }
-    );
+    Class cls = [WKWebView class];
+    Method m = class_getInstanceMethod(cls, @selector(initWithFrame:configuration:));
+    if (m) {
+        orig_initWithFrame_config = (id(*)(id,SEL,CGRect,id))method_getImplementation(m);
+        method_setImplementation(m, (IMP)swizzled_initWithFrame_config);
+    }
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0*NSEC_PER_SEC)),
+        dispatch_get_main_queue(), ^{ [PiPButton show]; });
 }
