@@ -2,6 +2,7 @@
 #import <WebKit/WebKit.h>
 
 static UIWindow *floatWindow;
+static UIWindow *alertWindow;
 static UILabel *statusLabel;
 
 static WKWebView *findWebView(UIView *view) {
@@ -27,9 +28,45 @@ static WKWebView *findWebView(UIView *view) {
 + (void)show;
 + (void)onTap;
 + (void)onPan:(UIPanGestureRecognizer *)pan;
++ (void)showAlert:(NSString *)message;
 @end
 
 @implementation PiPButton
+
++ (void)showAlert:(NSString *)message {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIWindowScene *ws = nil;
+        for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
+            if ([s isKindOfClass:[UIWindowScene class]]) {
+                ws = (UIWindowScene *)s; break;
+            }
+        }
+        if (!ws) return;
+
+        // アラート専用ウィンドウを作る
+        alertWindow = [[UIWindow alloc] initWithWindowScene:ws];
+        alertWindow.windowLevel = UIWindowLevelAlert + 200;
+        alertWindow.backgroundColor = [UIColor clearColor];
+        UIViewController *vc = [UIViewController new];
+        alertWindow.rootViewController = vc;
+        alertWindow.hidden = NO;
+        [alertWindow makeKeyAndVisible];
+
+        UIAlertController *alert = [UIAlertController
+            alertControllerWithTitle:@"PiP Debug"
+            message:message
+            preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction
+            actionWithTitle:@"OK"
+            style:UIAlertActionStyleDefault
+            handler:^(UIAlertAction *a) {
+                alertWindow.hidden = YES;
+                alertWindow = nil;
+            }]];
+
+        [vc presentViewController:alert animated:YES completion:nil];
+    });
+}
 
 + (void)show {
     if (floatWindow) return;
@@ -77,23 +114,6 @@ static WKWebView *findWebView(UIView *view) {
     } @catch (NSException *e) {}
 }
 
-+ (void)showAlert:(NSString *)message {
-    UIWindowScene *ws = nil;
-    for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
-        if ([s isKindOfClass:[UIWindowScene class]]) {
-            ws = (UIWindowScene *)s; break;
-        }
-    }
-    UIWindow *win = ws.windows.firstObject;
-    UIAlertController *alert = [UIAlertController
-        alertControllerWithTitle:@"PiPTweak Debug"
-        message:message
-        preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"OK"
-        style:UIAlertActionStyleDefault handler:nil]];
-    [win.rootViewController presentViewController:alert animated:YES completion:nil];
-}
-
 + (void)onTap {
     @try {
         UIWindowScene *ws = nil;
@@ -111,7 +131,7 @@ static WKWebView *findWebView(UIView *view) {
         }
 
         if (!webView) {
-            [self showAlert:@"WKWebViewが見つかりません"];
+            [self showAlert:@"WKWebViewなし"];
             statusLabel.text = @"WebViewなし";
             return;
         }
@@ -136,11 +156,12 @@ static WKWebView *findWebView(UIView *view) {
                 } else {
                     NSString *str = [NSString stringWithFormat:@"%@", result ?: @"nil"];
                     [PiPButton showAlert:str];
-                    statusLabel.text = @"確認";
+                    statusLabel.text = @"OK";
                 }
             });
         }];
     } @catch (NSException *e) {
+        [self showAlert:[NSString stringWithFormat:@"例外: %@", e]];
         statusLabel.text = @"ERR";
     }
 }
