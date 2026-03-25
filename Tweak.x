@@ -6,6 +6,7 @@
 static UIWindow *floatWindow;
 static UIWindow *alertWindow;
 static UILabel *statusLabel;
+static BOOL isPiPActive = NO;
 
 static id (*orig_initWithFrame_config)(id, SEL, CGRect, id) = NULL;
 static id swizzled_initWithFrame_config(id self, SEL _cmd, CGRect frame, WKWebViewConfiguration *config) {
@@ -30,7 +31,6 @@ static id swizzled_initWithFrame_config(id self, SEL _cmd, CGRect frame, WKWebVi
         injectionTime:WKUserScriptInjectionTimeAtDocumentStart
         forMainFrameOnly:NO];
     [config.userContentController addUserScript:script];
-
     return orig_initWithFrame_config(self, _cmd, frame, config);
 }
 
@@ -50,13 +50,33 @@ static id swizzled_initWithFrame_config(id self, SEL _cmd, CGRect frame, WKWebVi
 + (void)onPan:(UIPanGestureRecognizer *)pan;
 + (void)showAlert:(NSString *)msg;
 + (void)collectWebViews:(UIView *)view into:(NSMutableArray *)arr;
-+ (void)triggerPiP:(WKWebView *)wv;
++ (void)triggerPiP:(WKWebView *)wv toggle:(BOOL)toggle;
++ (void)updateButtonState;
 @end
 
 @implementation PiPButton
 
++ (void)updateButtonState {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (!floatWindow) return;
+        UIButton *btn = nil;
+        for (UIView *v in floatWindow.rootViewController.view.subviews) {
+            if ([v isKindOfClass:[UIButton class]]) { btn = (UIButton *)v; break; }
+        }
+        if (!btn) return;
+        if (isPiPActive) {
+            btn.backgroundColor = [UIColor colorWithRed:0.0 green:0.5 blue:1.0 alpha:0.9];
+            statusLabel.text = @"ON";
+        } else {
+            btn.backgroundColor = [UIColor colorWithRed:0.2 green:0.2 blue:0.2 alpha:0.9];
+            statusLabel.text = @"OFF";
+        }
+    });
+}
+
 + (void)showAlert:(NSString *)msg {
     dispatch_async(dispatch_get_main_queue(), ^{
+        if (alertWindow) return;
         UIWindowScene *ws = nil;
         for (UIScene *s in [UIApplication sharedApplication].connectedScenes)
             if ([s isKindOfClass:[UIWindowScene class]]) { ws=(UIWindowScene*)s; break; }
@@ -83,46 +103,62 @@ static id swizzled_initWithFrame_config(id self, SEL _cmd, CGRect frame, WKWebVi
     for (UIView *sub in view.subviews) [self collectWebViews:sub into:arr];
 }
 
-+ (void)triggerPiP:(WKWebView *)wv {
-    // 既存WebViewにKVCで強制有効化
++ (void)triggerPiP:(WKWebView *)wv toggle:(BOOL)toggle {
     @try { [wv setValue:@YES forKeyPath:@"configuration.allowsPictureInPictureMediaPlayback"]; } @catch(NSException *e){}
 
-    NSString *js = @""
-        "(function(){"
-        "  var vids=document.querySelectorAll('video');"
-        "  if(!vids.length) return null;"
-        "  var v=vids[0];"
-        "  var dbg='src:'+!!v.currentSrc+' paused:'+v.paused+' webkit:'+(!!v.webkitSupportsPresentationMode);"
-        "  try{"
-        "    if(v.webkitSupportsPresentationMode&&v.webkitSupportsPresentationMode('picture-in-picture')){"
-        "      v.webkitSetPresentationMode('picture-in-picture');"
-        "      return 'OK-webkit';"
-        "    }"
-        "  }catch(e){dbg+=' wkErr:'+e.message;}"
-        "  try{"
-        "    v.requestPictureInPicture();"
-        "    return 'OK-pip';"
-        "  }catch(e){dbg+=' pipErr:'+e.message;}"
-        "  return dbg;"
-        "})();";
+    // toggleがYESならPiP終了、NOなら開始
+    NSString *js = toggle
+        ? @"(function(){"
+          "  var vids=document.querySelectorAll('video');"
+          "  if(!vids.length) return null;"
+          "  var v=vids[0];"
+          "  try{"
+          "    if(v.webkitPresentationMode==='picture-in-picture'){"
+          "      v.webkitSetPresentationMode('inline');"
+          "      return 'STOPPED';"
+          "    }"
+          "  }catch(e){}"
+          "  try{"
+          "    if(document.pictureInPictureElement){"
+          "      document.exitPictureInPicture();"
+          "      return 'STOPPED';"
+          "    }"
+          "  }catch(e){}"
+          "  return null;"
+          "})();"
+        : @"(function(){"
+          "  var vids=document.querySelectorAll('video');"
+          "  if(!vids.length) return null;"
+          "  var v=vids[0];"
+          "  var dbg='v:'+vids.length+' src:'+!!v.currentSrc+' paused:'+v.paused;"
+          "  try{"
+          "    if(v.webkitSupportsPresentationMode&&v.webkitSupportsPresentationMode('picture-in-picture')){"
+          "      v.webkitSetPresentationMode('picture-in-picture');"
+          "      return 'OK-webkit';"
+          "    }"
+          "  }catch(e){dbg+=' wkErr:'+e.message;}"
+          "  try{"
+          "    v.requestPictureInPicture();"
+          "    return 'OK-pip';"
+          "  }catch(e){dbg+=' pipErr:'+e.message;}"
+          "  return dbg;"
+          "})();";
 
-    // objc_msgSendでプライベートAPI直接呼び出し (withUserGesture:YES)
     SEL sel = NSSelectorFromString(@"_evaluateJavaScript:inFrame:inContentWorld:withUserGesture:completionHandler:");
-
     void (^handler)(id, NSError *) = ^(id result, NSError *error) {
+        if (!result || [result isEqual:[NSNull null]]) return;
+        NSString *str = [NSString stringWithFormat:@"%@", result];
+        NSLog(@"[PiPTweak] result: %@", str);
         dispatch_async(dispatch_get_main_queue(), ^{
-            if (error) {
-                NSLog(@"[PiPTweak] evalError: %@", error.localizedDescription);
-                return;
-            }
-            if (!result || [result isEqual:[NSNull null]]) return;
-            NSString *str = [NSString stringWithFormat:@"%@", result];
-            NSLog(@"[PiPTweak] result: %@", str);
             if ([str hasPrefix:@"OK"]) {
-                statusLabel.text = @"OK!";
-            } else {
+                isPiPActive = YES;
+                [PiPButton updateButtonState];
+            } else if ([str isEqualToString:@"STOPPED"]) {
+                isPiPActive = NO;
+                [PiPButton updateButtonState];
+            } else if (str.length > 2) {
                 [PiPButton showAlert:str];
-                statusLabel.text = @"詳細";
+                if (statusLabel) statusLabel.text = @"詳細";
             }
         });
     };
@@ -135,7 +171,6 @@ static id swizzled_initWithFrame_config(id self, SEL _cmd, CGRect frame, WKWebVi
         imp(wv, sel, js, nil, WKContentWorld.pageWorld, YES, handler);
         #pragma clang diagnostic pop
     } else {
-        // フォールバック
         [wv evaluateJavaScript:js completionHandler:handler];
     }
 }
@@ -149,38 +184,40 @@ static id swizzled_initWithFrame_config(id self, SEL _cmd, CGRect frame, WKWebVi
         if (!ws) return;
 
         floatWindow = [[PassthroughWindow alloc] initWithWindowScene:ws];
-        floatWindow.frame = CGRectMake(20, 120, 70, 85);
+        floatWindow.frame = CGRectMake(20, 120, 70, 90);
         floatWindow.windowLevel = UIWindowLevelAlert + 100;
         floatWindow.backgroundColor = [UIColor clearColor];
-        floatWindow.rootViewController = [UIViewController new];
-        floatWindow.rootViewController.view.backgroundColor = [UIColor clearColor];
+        UIViewController *vc = [UIViewController new];
+        vc.view.backgroundColor = [UIColor clearColor];
+        floatWindow.rootViewController = vc;
         floatWindow.hidden = NO;
 
         UIButton *btn = [UIButton buttonWithType:UIButtonTypeCustom];
         btn.frame = CGRectMake(5, 5, 60, 60);
-        btn.backgroundColor = [UIColor colorWithRed:0.85 green:0.0 blue:0.0 alpha:0.9];
+        btn.backgroundColor = [UIColor colorWithRed:0.2 green:0.2 blue:0.2 alpha:0.9];
         btn.layer.cornerRadius = 30;
         btn.layer.borderWidth = 2.0;
         btn.layer.borderColor = [UIColor whiteColor].CGColor;
         btn.clipsToBounds = YES;
-        [btn setTitle:@"PiP" forState:UIControlStateNormal];
-        [btn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-        btn.titleLabel.font = [UIFont boldSystemFontOfSize:13];
+        [btn setTitle:@"📺" forState:UIControlStateNormal];
+        btn.titleLabel.font = [UIFont systemFontOfSize:26];
         [btn addTarget:self action:@selector(onTap) forControlEvents:UIControlEventTouchUpInside];
 
         UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc]
             initWithTarget:self action:@selector(onPan:)];
         [btn addGestureRecognizer:pan];
 
-        statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 67, 70, 16)];
-        statusLabel.textColor = [UIColor yellowColor];
-        statusLabel.font = [UIFont systemFontOfSize:10];
+        statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 68, 70, 18)];
+        statusLabel.textColor = [UIColor whiteColor];
+        statusLabel.font = [UIFont boldSystemFontOfSize:10];
         statusLabel.textAlignment = NSTextAlignmentCenter;
-        statusLabel.text = @"待機";
+        statusLabel.text = @"OFF";
 
-        [floatWindow.rootViewController.view addSubview:btn];
-        [floatWindow.rootViewController.view addSubview:statusLabel];
-    } @catch (NSException *e) {}
+        [vc.view addSubview:btn];
+        [vc.view addSubview:statusLabel];
+    } @catch (NSException *e) {
+        NSLog(@"[PiPTweak] show error: %@", e);
+    }
 }
 
 + (void)onTap {
@@ -190,17 +227,41 @@ static id swizzled_initWithFrame_config(id self, SEL _cmd, CGRect frame, WKWebVi
             if ([s isKindOfClass:[UIWindowScene class]]) { ws=(UIWindowScene*)s; break; }
         if (!ws) return;
 
+        // 毎回WebViewを探し直す
         NSMutableArray *all = [NSMutableArray array];
-        for (UIWindow *win in ws.windows) [self collectWebViews:win into:all];
+        for (UIWindow *win in ws.windows) {
+            if (win == floatWindow || win == alertWindow) continue;
+            [self collectWebViews:win into:all];
+        }
 
-        if (!all.count) { [self showAlert:@"WebViewなし"]; return; }
+        if (!all.count) {
+            [self showAlert:@"WebViewなし"];
+            return;
+        }
 
-        statusLabel.text = @"起動中";
-        for (WKWebView *wv in all) [self triggerPiP:wv];
+        // 動画のあるWebViewだけに絞る
+        NSString *checkJS = @"document.querySelectorAll('video').length;";
+        __block NSInteger checked = 0;
+        NSInteger total = all.count;
 
+        for (WKWebView *wv in all) {
+            [wv evaluateJavaScript:checkJS completionHandler:^(id result, NSError *error) {
+                checked++;
+                NSInteger count = [result integerValue];
+                if (count > 0) {
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        [PiPButton triggerPiP:wv toggle:isPiPActive];
+                    });
+                }
+                if (checked == total && !isPiPActive) {
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        if (statusLabel) statusLabel.text = @"動画なし";
+                    });
+                }
+            }];
+        }
     } @catch (NSException *e) {
         [self showAlert:[NSString stringWithFormat:@"ERR:%@",e]];
-        statusLabel.text = @"ERR";
     }
 }
 
