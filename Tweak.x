@@ -346,20 +346,25 @@ static id swizzled_initWithFrame_config(id self, SEL _cmd, CGRect frame, WKWebVi
             "  return src;"
             "})();";
 
+        __block BOOL handled = NO;
+        // 全WVが無反応の場合のフォールバック
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)),
+            dispatch_get_main_queue(), ^{
+                if (!handled) [PiPButton showAlert:@"再生中の動画が見つかりません"];
+            });
+
         for (WKWebView *wv in all) {
             [wv evaluateJavaScript:srcJS completionHandler:^(id result, NSError *error) {
+                if (handled) return;
                 if (!result || [result isEqual:[NSNull null]]) return;
                 NSString *urlStr = [NSString stringWithFormat:@"%@", result];
                 if (!urlStr.length || [urlStr isEqualToString:@"null"]) return;
 
-                if ([urlStr isEqualToString:@"NO_VIDEO"]) {
-                    dispatch_async(dispatch_get_main_queue(), ^{ [PiPButton showAlert:@"動画が見つかりません"]; });
-                    return;
-                }
-                if ([urlStr isEqualToString:@"NO_SRC"]) {
-                    dispatch_async(dispatch_get_main_queue(), ^{ [PiPButton showAlert:@"動画URLを取得できません"]; });
-                    return;
-                }
+                // このWVに動画なし → 次のWVへ
+                if ([urlStr isEqualToString:@"NO_VIDEO"] || [urlStr isEqualToString:@"NO_SRC"]) return;
+
+                handled = YES;
+
                 if ([urlStr isEqualToString:@"BLOB_URL"]) {
                     dispatch_async(dispatch_get_main_queue(), ^{
                         [PiPButton showAlert:@"この動画はblob URLを使用しており直接ダウンロードできません\n(DRM・暗号化コンテンツ)"];
