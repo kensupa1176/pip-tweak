@@ -327,8 +327,23 @@ static id swizzled_initWithFrame_config(id self, SEL _cmd, CGRect frame, WKWebVi
         NSString *srcJS = @""
             "(function(){"
             "  var vids=document.querySelectorAll('video');"
-            "  if(!vids.length) return null;"
-            "  return vids[0].currentSrc||vids[0].src||null;"
+            "  if(!vids.length) return 'NO_VIDEO';"
+            "  var v=vids[0];"
+            "  var src=v.currentSrc||v.src||'';"
+            "  if(!src){"
+            "    var se=v.querySelector('source');"
+            "    if(se) src=se.src||'';"
+            "  }"
+            "  if(!src) return 'NO_SRC';"
+            "  if(src.indexOf('blob:')==0){"
+            "    var srcs=document.querySelectorAll('video source');"
+            "    for(var i=0;i<srcs.length;i++){"
+            "      var u=srcs[i].src;"
+            "      if(u&&u.indexOf('blob:')!=0&&u.indexOf('data:')!=0) return u;"
+            "    }"
+            "    return 'BLOB_URL';"
+            "  }"
+            "  return src;"
             "})();";
 
         for (WKWebView *wv in all) {
@@ -336,6 +351,27 @@ static id swizzled_initWithFrame_config(id self, SEL _cmd, CGRect frame, WKWebVi
                 if (!result || [result isEqual:[NSNull null]]) return;
                 NSString *urlStr = [NSString stringWithFormat:@"%@", result];
                 if (!urlStr.length || [urlStr isEqualToString:@"null"]) return;
+
+                if ([urlStr isEqualToString:@"NO_VIDEO"]) {
+                    dispatch_async(dispatch_get_main_queue(), ^{ [PiPButton showAlert:@"動画が見つかりません"]; });
+                    return;
+                }
+                if ([urlStr isEqualToString:@"NO_SRC"]) {
+                    dispatch_async(dispatch_get_main_queue(), ^{ [PiPButton showAlert:@"動画URLを取得できません"]; });
+                    return;
+                }
+                if ([urlStr isEqualToString:@"BLOB_URL"]) {
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        [PiPButton showAlert:@"この動画はblob URLを使用しており直接ダウンロードできません\n(DRM・暗号化コンテンツ)"];
+                    });
+                    return;
+                }
+                if ([urlStr.lowercaseString hasSuffix:@".m3u8"]) {
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        [PiPButton showAlert:@"HLSストリーミング(.m3u8)は直接ダウンロードできません"];
+                    });
+                    return;
+                }
 
                 dispatch_async(dispatch_get_main_queue(), ^{
                     // ダウンロード確認アラート
@@ -375,6 +411,11 @@ static id swizzled_initWithFrame_config(id self, SEL _cmd, CGRect frame, WKWebVi
 + (void)startDownload:(NSString *)urlStr {
     NSURL *url = [NSURL URLWithString:urlStr];
     if (!url) { [self showAlert:@"URLが無効です"]; return; }
+    NSString *scheme = url.scheme.lowercaseString;
+    if (![scheme isEqualToString:@"http"] && ![scheme isEqualToString:@"https"]) {
+        [self showAlert:[NSString stringWithFormat:@"サポートされていないURL形式: %@\nblob/dataスキームは非対応です", scheme]];
+        return;
+    }
 
     if (statusLabel) statusLabel.text = @"DL中";
 
