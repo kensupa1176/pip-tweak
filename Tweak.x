@@ -123,7 +123,6 @@ static id swizzled_initWithFrame_config(id self, SEL _cmd, CGRect frame, WKWebVi
 + (void)hide;
 + (void)onTap;
 + (void)onDownloadTap;
-+ (void)onSettingsTap;
 + (void)onPan:(UIPanGestureRecognizer *)pan;
 + (void)showAlert:(NSString *)msg;
 + (void)showAlertWithTitle:(NSString *)title message:(NSString *)msg;
@@ -681,6 +680,9 @@ static id swizzled_initWithFrame_config(id self, SEL _cmd, CGRect frame, WKWebVi
     if (dlBtn) {
         dlBtn.backgroundColor = [UIColor colorWithRed:1.0 green:0.6 blue:0.0 alpha:0.92];
     }
+    
+    // dlBtnを使用する参照（警告防止）
+    (void)dlBtn;
     
     NSURLSessionConfiguration *config = [NSURLSessionConfiguration defaultSessionConfiguration];
     config.HTTPAdditionalHeaders = @{
