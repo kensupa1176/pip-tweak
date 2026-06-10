@@ -61,8 +61,12 @@ jobs:
           # バイナリ再署名
           ldid -S "MyApp/Payload/${APP_PATH}/${APP_NAME}"
 
+      - name: Create IPA
+        run: |
+          pwd
+          ls -la
           python3 create_ipa.py
-          ls -la .
+          ls -la MyApp_pip.ipa
 
       - name: Upload result
         uses: actions/upload-artifact@v4
