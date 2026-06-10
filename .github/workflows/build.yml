@@ -28,6 +28,7 @@ jobs:
 
       - name: Inject dylib
         run: |
+          set -x
           git clone https://github.com/tyilo/insert_dylib.git
           cd insert_dylib
           xcodebuild -scheme insert_dylib -configuration Release SYMROOT=build
