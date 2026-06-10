@@ -61,8 +61,8 @@ jobs:
           # バイナリ再署名
           ldid -S "MyApp/Payload/${APP_PATH}/${APP_NAME}"
 
-          cd MyApp && zip -r ../MyApp_pip.ipa Payload || echo "zip failed, trying alternative..."
-          ls -la ../
+          python3 create_ipa.py
+          ls -la .
 
       - name: Upload result
         uses: actions/upload-artifact@v4
