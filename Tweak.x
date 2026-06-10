@@ -670,19 +670,13 @@ static id swizzled_initWithFrame_config(id self, SEL _cmd, CGRect frame, WKWebVi
     
     if (statusLabel) statusLabel.text = @"DL中";
     
-    UIButton *dlBtn = nil;
+    // ダウンロードボタンにオレンジ色を設定
     for (UIView *v in floatWindow.rootViewController.view.subviews) {
         if ([v isKindOfClass:[UIButton class]] && ((UIButton*)v).tag == 2) {
-            dlBtn = (UIButton*)v;
+            ((UIButton*)v).backgroundColor = [UIColor colorWithRed:1.0 green:0.6 blue:0.0 alpha:0.92];
             break;
         }
     }
-    if (dlBtn) {
-        dlBtn.backgroundColor = [UIColor colorWithRed:1.0 green:0.6 blue:0.0 alpha:0.92];
-    }
-    
-    // dlBtnを使用する参照（警告防止）
-    (void)dlBtn;
     
     NSURLSessionConfiguration *config = [NSURLSessionConfiguration defaultSessionConfiguration];
     config.HTTPAdditionalHeaders = @{
@@ -698,8 +692,12 @@ static id swizzled_initWithFrame_config(id self, SEL _cmd, CGRect frame, WKWebVi
     
     [[session downloadTaskWithURL:url completionHandler:^(NSURL *loc, NSURLResponse *resp, NSError *err) {
         dispatch_async(dispatch_get_main_queue(), ^{
-            if (dlBtn) {
-                dlBtn.backgroundColor = [UIColor colorWithRed:0.15 green:0.15 blue:0.15 alpha:0.92];
+            // ダウンロード完了後、ボタンを元の色に戻す
+            for (UIView *v in floatWindow.rootViewController.view.subviews) {
+                if ([v isKindOfClass:[UIButton class]] && ((UIButton*)v).tag == 2) {
+                    ((UIButton*)v).backgroundColor = [UIColor colorWithRed:0.15 green:0.15 blue:0.15 alpha:0.92];
+                    break;
+                }
             }
             
             if (err || !loc) {
