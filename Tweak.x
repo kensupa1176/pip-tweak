@@ -148,11 +148,10 @@ static id swizzled_initWithFrame_config(id self, SEL _cmd, CGRect frame, WKWebVi
     if (!floatWindow) return;
     
     UIButton *pipBtn = nil;
-    UIButton *dlBtn = nil;
     for (UIView *v in floatWindow.rootViewController.view.subviews) {
-        if ([v isKindOfClass:[UIButton class]]) {
-            if (((UIButton*)v).tag == 1) pipBtn = (UIButton*)v;
-            if (((UIButton*)v).tag == 2) dlBtn = (UIButton*)v;
+        if ([v isKindOfClass:[UIButton class]] && ((UIButton*)v).tag == 1) {
+            pipBtn = (UIButton*)v;
+            break;
         }
     }
     
