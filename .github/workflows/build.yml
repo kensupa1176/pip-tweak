@@ -24,7 +24,7 @@ jobs:
       - name: Download IPA
         run: |
           curl -L \
-            "https://github.com/kensupa1176/pip-tweak/releases/download/v1.0/Netflix.ipa" \
+            "https://github.com/kensupa1176/pip-tweak/releases/download/mv2532/Netflix.ipa" \
             -o MyApp.ipa
           ls -lh MyApp.ipa
 
